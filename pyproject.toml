@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools", "wheel", "torch>=2.7.0", "pybind11>=3.0.1","numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hw4"
+version = "0.1.0"
+description = "Add your description here"
+readme = "AGENTS.md"
+requires-python = ">=3.13"
+authors = [
+    { name = "Li Yixin", email = "2200013104@stu.pku.edu.cn" }
+]
+dependencies = [
+    "pip>=25.3",
+    "pybind11>=3.0.1",
+    "pytest>=9.0.1",
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "web3>=7.14.0",
+]
+
+
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
