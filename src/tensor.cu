@@ -130,6 +130,32 @@ std::vector<float> Tensor::to_vector() const {
   return host;
 }
 
+Tensor Tensor::reshape(const std::vector<index_t> &shape) const {
+  if (!is_contiguous) {
+    throw std::runtime_error("reshape: only contiguous tensors are supported");
+  }
+  if (offset_ != 0) {
+    throw std::runtime_error("reshape: tensors with non-zero offset are not supported");
+  }
+
+  index_t new_numel = 1;
+  for (index_t dim : shape) {
+    new_numel *= dim;
+  }
+  if (shape.empty()) {
+    new_numel = 0;
+  }
+  if (new_numel != numel()) {
+    throw std::runtime_error("reshape: total size mismatch");
+  }
+
+  Tensor out = *this;
+  out.shape_ = shape;
+  out.compute_default_strides_();
+  out.is_contiguous = true;
+  return out;
+}
+
 Tensor Tensor::cpu() const { return transfer_to(Device::cpu()); }
 
 Tensor Tensor::gpu() const { return transfer_to(Device::cuda()); }

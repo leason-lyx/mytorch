@@ -2,6 +2,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstddef>
+
 #include "conv.cuh"
 #include "functional.cuh"
 #include "linear.cuh"
@@ -41,6 +43,7 @@ PYBIND11_MODULE(mytensor, m) {
             return t;
         }), py::arg("array"), py::arg("device") = Device::cpu())
         .def("shape", &Tensor::shape)
+        .def("reshape", &Tensor::reshape)
         .def("cpu", &Tensor::cpu)
         .def("gpu", &Tensor::gpu)
         .def("numpy", [](const Tensor &t) {
@@ -63,17 +66,52 @@ PYBIND11_MODULE(mytensor, m) {
 
     // Functional
     m.def("relu", &relu, "ReLU activation");
+    m.def("relu_backward", &relu_backward, "ReLU backward");
     m.def("sigmoid", &sigmoid, "Sigmoid activation");
+    m.def("sigmoid_backward", &sigmoid_backward, "Sigmoid backward");
     m.def("softmax", &softmax, "Softmax activation");
     m.def("cross_entropy_loss", &cross_entropy_loss, "Cross Entropy Loss");
+    m.def("cross_entropy_loss_backward", &cross_entropy_loss_backward,
+          "Cross Entropy Loss backward");
 
     // Layers
     m.def("linear", &linear, "Linear layer");
+    m.def("linear_backward", &linear_backward, "Linear backward");
     m.def("conv2d", &conv2d, "Conv2d layer", py::arg("input"),
           py::arg("weights"), py::arg("bias"), py::arg("stride_height") = 1,
           py::arg("stride_width") = 1, py::arg("padding_height") = 0,
           py::arg("padding_width") = 0);
+    m.def("conv2d_backward",
+          [](const Tensor &input, const Tensor &output, const Tensor &weights,
+             const Tensor &bias, int stride_height, int stride_width,
+             int padding_height, int padding_width, const Tensor &grad_output) {
+              Tensor grad_input(input.shape(), input.device());
+              Tensor grad_weights(weights.shape(), weights.device());
+              Tensor grad_bias(bias.shape(), bias.device());
+              conv2d_backward(input, output, weights, bias, stride_height,
+                              stride_width, padding_height, padding_width,
+                              grad_output, grad_input, grad_weights, grad_bias);
+              return py::make_tuple(grad_input, grad_weights, grad_bias);
+          },
+          "Conv2d backward", py::arg("input"), py::arg("output"),
+          py::arg("weights"), py::arg("bias"), py::arg("stride_height") = 1,
+          py::arg("stride_width") = 1, py::arg("padding_height") = 0,
+          py::arg("padding_width") = 0, py::arg("grad_output"));
     m.def("max_pool2d", &max_pool2d, "MaxPool2d layer", py::arg("input"),
           py::arg("pool_height"), py::arg("pool_width"),
           py::arg("stride_height"), py::arg("stride_width"));
+    m.def("max_pool2d_backward",
+          [](const Tensor &input, const Tensor &output, std::size_t pool_height,
+             std::size_t pool_width, std::size_t stride_height,
+             std::size_t stride_width,
+             const Tensor &grad_output) {
+              Tensor grad_input(input.shape(), input.device());
+              return max_pool2d_backward(input, output, pool_height, pool_width,
+                                         stride_height, stride_width,
+                                         grad_output, grad_input);
+          },
+          "MaxPool2d backward", py::arg("input"), py::arg("output"),
+          py::arg("pool_height"), py::arg("pool_width"),
+          py::arg("stride_height"), py::arg("stride_width"),
+          py::arg("grad_output"));
 }

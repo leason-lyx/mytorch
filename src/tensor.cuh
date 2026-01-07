@@ -62,6 +62,8 @@ public:
     void from_vector(const std::vector<float> &host);
     std::vector<float> to_vector() const;
 
+    Tensor reshape(const std::vector<index_t> &shape) const;
+
     Tensor cpu() const;
     Tensor gpu() const;
 
