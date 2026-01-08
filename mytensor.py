@@ -1,38 +1,15 @@
-import importlib.util
-import pathlib
 import sys
 import types
 
 import numpy as np
 
 
-def _find_extension_path(module_dir: pathlib.Path) -> pathlib.Path:
-    suffixes = (".pyd", ".so", ".dylib")
-    candidates = []
-    for suffix in suffixes:
-        candidates.extend(module_dir.glob(f"mytensor*{suffix}"))
-    candidates = [path for path in candidates if path.is_file()]
-    if not candidates:
-        raise ImportError(
-            "Cannot locate the compiled mytensor extension module next to mytensor.py."
-        )
-    return sorted(candidates)[0]
-
-
-def _load_core_module() -> types.ModuleType:
-    module_dir = pathlib.Path(__file__).resolve().parent
-    ext_path = _find_extension_path(module_dir)
-    # Remove this module entry so the extension can load under the same name.
-    sys.modules.pop(__name__, None)
-    spec = importlib.util.spec_from_file_location(__name__, ext_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Failed to create a module spec for {ext_path}.")
-    core = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(core)
-    return core
-
-
-_core = _load_core_module()
+try:
+    from mytensor_core import _core as _core
+except ImportError as exc:
+    raise ImportError(
+        "Cannot import mytensor_core._core. Rebuild the extension with `uv pip install -e .`."
+    ) from exc
 
 _raw = types.SimpleNamespace(
     Tensor=_core.Tensor,

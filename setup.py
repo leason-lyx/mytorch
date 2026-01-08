@@ -16,7 +16,7 @@ setup(
     install_requires=[
         "torch",],
     ext_modules=[
-        CUDAExtension(name="mytensor",
+        CUDAExtension(name="mytensor_core._core",
                       sources=sources,
                       libraries=["cublas"], 
                       )],

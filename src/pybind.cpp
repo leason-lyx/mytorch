@@ -12,7 +12,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(mytensor, m) {
+PYBIND11_MODULE(_core, m) {
     m.doc() = "My Tensor Library";
 
     py::class_<Device>(m, "Device")

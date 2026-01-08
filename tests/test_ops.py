@@ -6,6 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 import numpy as np
+
 import mytensor
 
 # Helper to create random tensors
@@ -18,6 +19,11 @@ def check_tensors(my_tensor, torch_tensor, atol=1e-4, rtol=1e-3):
     
     assert my_np.shape == torch_np.shape, f"Shape mismatch: {my_np.shape} vs {torch_np.shape}"
     np.testing.assert_allclose(my_np, torch_np, atol=atol, rtol=rtol)
+
+def check_gradients(my_tensor, torch_tensor, atol=1e-4, rtol=1e-3):
+    assert my_tensor.grad is not None, "MyTensor grad is None"
+    assert torch_tensor.grad is not None, "Torch grad is None"
+    check_tensors(my_tensor.grad, torch_tensor.grad, atol=atol, rtol=rtol)
 
 def test_sigmoid():
     shape = (1024, 1024)
@@ -108,8 +114,7 @@ def test_conv2d():
     t_in = t_in.gpu()
     t_w = t_w.gpu()
     t_b = t_b.gpu()
-    # conv2d(input, weights, bias, stride_h, stride_w, padding_h, padding_w)
-    out_my = mytensor.conv2d(t_in, t_w, t_b, stride, stride, padding, padding)
+    out_my = mytensor.conv2d(t_in, t_w, t_b, stride=stride, padding=padding)
     out_my = out_my.cpu()
     
     # PyTorch
@@ -132,8 +137,7 @@ def test_max_pool2d():
 
     # MyTensor
     t_in = mytensor.Tensor(input_data).gpu()
-    # max_pool2d(input, pool_height, pool_width, stride_height, stride_width)
-    out_my = mytensor.max_pool2d(t_in, pool_size, pool_size, stride, stride).cpu()
+    out_my = mytensor.max_pool2d(t_in, pool_size, stride=stride).cpu()
     
     # PyTorch
     t_in_torch = torch.tensor(input_data)
@@ -195,6 +199,159 @@ def test_cross_entropy_loss():
         np.testing.assert_allclose(my_np.item(), torch_np.item(), atol=1e-4, rtol=1e-3)
     else:
         check_tensors(out_my, out_torch)
+
+def test_linear_backward():
+    batch_size = 4
+    in_features = 8
+    out_features = 5
+    input_data = get_random_data((batch_size, in_features))
+    weight_data = get_random_data((in_features, out_features))
+    bias_data = get_random_data((out_features,))
+    grad_out = get_random_data((batch_size, out_features))
+
+    if not torch.cuda.is_available():
+        pytest.fail("CUDA not available, but required for linear backward test")
+
+    x = mytensor.Tensor(input_data, requires_grad=True, device="cuda")
+    w = mytensor.Tensor(weight_data, requires_grad=True, device="cuda")
+    b = mytensor.Tensor(bias_data, requires_grad=True, device="cuda")
+    out_my = mytensor.linear(x, w, b)
+    out_my.backward(grad_out)
+
+    x_torch = torch.tensor(input_data, requires_grad=True)
+    w_torch = torch.tensor(weight_data.T, requires_grad=True)
+    b_torch = torch.tensor(bias_data, requires_grad=True)
+    out_torch = F.linear(x_torch, w_torch, b_torch)
+    out_torch.backward(torch.tensor(grad_out))
+
+    check_tensors(x.grad, x_torch.grad)
+    check_tensors(w.grad, w_torch.grad.T)
+    check_tensors(b.grad, b_torch.grad)
+
+def test_conv2d_backward():
+    N, C_in, H, W = 2, 3, 5, 5
+    C_out = 4
+    K = 3
+    stride = 1
+    padding = 1
+
+    input_data = get_random_data((N, C_in, H, W))
+    weight_data = get_random_data((C_out, C_in, K, K))
+    bias_data = get_random_data((C_out,))
+
+    if not torch.cuda.is_available():
+        pytest.fail("CUDA not available, but required for conv2d backward test")
+
+    x = mytensor.Tensor(input_data, requires_grad=True, device="cuda")
+    w = mytensor.Tensor(weight_data, requires_grad=True, device="cuda")
+    b = mytensor.Tensor(bias_data, requires_grad=True, device="cuda")
+    out_my = mytensor.conv2d(x, w, b, stride=stride, padding=padding)
+    grad_out = get_random_data(out_my.shape)
+    out_my.backward(grad_out)
+
+    x_torch = torch.tensor(input_data, requires_grad=True)
+    w_torch = torch.tensor(weight_data, requires_grad=True)
+    b_torch = torch.tensor(bias_data, requires_grad=True)
+    out_torch = F.conv2d(x_torch, w_torch, b_torch, stride=stride, padding=padding)
+    out_torch.backward(torch.tensor(grad_out))
+
+    check_tensors(x.grad, x_torch.grad, atol=1e-3, rtol=1e-3)
+    check_tensors(w.grad, w_torch.grad, atol=1e-3, rtol=1e-3)
+    check_tensors(b.grad, b_torch.grad, atol=1e-3, rtol=1e-3)
+
+def test_relu_backward():
+    shape = (8, 16)
+    data = get_random_data(shape)
+    grad_out = get_random_data(shape)
+
+    if not torch.cuda.is_available():
+        pytest.fail("CUDA not available, but required for relu backward test")
+
+    x = mytensor.Tensor(data, requires_grad=True, device="cuda")
+    out_my = mytensor.relu(x)
+    out_my.backward(grad_out)
+
+    x_torch = torch.tensor(data, requires_grad=True)
+    out_torch = torch.relu(x_torch)
+    out_torch.backward(torch.tensor(grad_out))
+
+    check_tensors(x.grad, x_torch.grad)
+
+def test_sigmoid_backward():
+    shape = (6, 7)
+    data = get_random_data(shape)
+    grad_out = get_random_data(shape)
+
+    if not torch.cuda.is_available():
+        pytest.fail("CUDA not available, but required for sigmoid backward test")
+
+    x = mytensor.Tensor(data, requires_grad=True, device="cuda")
+    out_my = mytensor.sigmoid(x)
+    out_my.backward(grad_out)
+
+    x_torch = torch.tensor(data, requires_grad=True)
+    out_torch = torch.sigmoid(x_torch)
+    out_torch.backward(torch.tensor(grad_out))
+
+    check_tensors(x.grad, x_torch.grad)
+
+def test_softmax_backward():
+    shape = (5, 4)
+    data = get_random_data(shape)
+    grad_out = get_random_data(shape)
+
+    if not torch.cuda.is_available():
+        pytest.fail("CUDA not available, but required for softmax backward test")
+
+    x = mytensor.Tensor(data, requires_grad=True, device="cuda")
+    out_my = mytensor.softmax(x)
+    out_my.backward(grad_out)
+
+    x_torch = torch.tensor(data, requires_grad=True)
+    out_torch = F.softmax(x_torch, dim=1)
+    out_torch.backward(torch.tensor(grad_out))
+
+    check_tensors(x.grad, x_torch.grad, atol=1e-3, rtol=1e-3)
+
+def test_max_pool2d_backward():
+    N, C, H, W = 2, 3, 4, 4
+    pool_size = 2
+    stride = 2
+    input_data = get_random_data((N, C, H, W))
+
+    if not torch.cuda.is_available():
+        pytest.fail("CUDA not available, but required for max_pool2d backward test")
+
+    x = mytensor.Tensor(input_data, requires_grad=True, device="cuda")
+    out_my = mytensor.max_pool2d(x, pool_size, stride=stride)
+    grad_out = get_random_data(out_my.shape)
+    out_my.backward(grad_out)
+
+    x_torch = torch.tensor(input_data, requires_grad=True)
+    out_torch = F.max_pool2d(x_torch, kernel_size=pool_size, stride=stride)
+    out_torch.backward(torch.tensor(grad_out))
+
+    check_tensors(x.grad, x_torch.grad)
+
+def test_cross_entropy_loss_backward():
+    batch_size = 6
+    num_classes = 7
+    logits_data = get_random_data((batch_size, num_classes))
+    labels_data = np.random.randint(0, num_classes, size=(batch_size,)).astype(np.int32)
+
+    if not torch.cuda.is_available():
+        pytest.fail("CUDA not available, but required for cross_entropy_loss backward test")
+
+    logits = mytensor.Tensor(logits_data, requires_grad=True, device="cuda")
+    loss_my = mytensor.cross_entropy_loss(logits, labels_data)
+    loss_my.backward()
+
+    logits_torch = torch.tensor(logits_data, requires_grad=True)
+    labels_torch = torch.tensor(labels_data, dtype=torch.long)
+    loss_torch = F.cross_entropy(logits_torch, labels_torch)
+    loss_torch.backward()
+
+    check_tensors(logits.grad, logits_torch.grad, atol=1e-3, rtol=1e-3)
 
 if __name__ == "__main__":
     pytest.main([__file__])

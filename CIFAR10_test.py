@@ -2,7 +2,7 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 import numpy as np
-# import mytensor
+import mytensor
 
 def main():
     print("Loading CIFAR-10 dataset using PyTorch...")
@@ -42,35 +42,35 @@ def main():
     # mytensor 期望输入为 float32 类型的 numpy 数组
     images_np = images.numpy().astype(np.float32)
     
-    # print("\nConverting to mytensor.Tensor...")
+    print("\nConverting to mytensor.Tensor...")
     
     # # 1. 转换为 CPU 上的 mytensor.Tensor
-    # # 使用 mytensor.Device("cpu") 指定设备
-    # try:
-    #     device_cpu = mytensor.Device("cpu")
-    #     my_images_cpu = mytensor.Tensor(images_np, device_cpu)
-    #     print(f"Successfully created MyTensor on CPU: {my_images_cpu}")
+    # 使用 mytensor.Device("cpu") 指定设备
+    try:
+        device_cpu = mytensor.Device("cpu")
+        my_images_cpu = mytensor.Tensor(images_np, device_cpu)
+        print(f"Successfully created MyTensor on CPU: {my_images_cpu}")
         
-    #     # 验证数据转换是否正确：转回 numpy 进行比较
-    #     images_back = my_images_cpu.numpy()
-    #     diff = np.abs(images_np - images_back).max()
-    #     print(f"Max difference between original and converted back: {diff}")
+        # 验证数据转换是否正确：转回 numpy 进行比较
+        images_back = my_images_cpu.numpy()
+        diff = np.abs(images_np - images_back).max()
+        print(f"Max difference between original and converted back: {diff}")
         
-    # except Exception as e:
-    #     print(f"Error creating CPU tensor: {e}")
+    except Exception as e:
+        print(f"Error creating CPU tensor: {e}")
 
     # 2. 尝试转换为 GPU 上的 mytensor.Tensor
     # 使用 mytensor.Device("cuda") 指定设备
-    # try:
-    #     if torch.cuda.is_available():
-    #         print("\nCUDA is available in PyTorch, attempting to create GPU Tensor in mytensor...")
-    #         device_cuda = mytensor.Device("cuda")
-    #         my_images_gpu = mytensor.Tensor(images_np, device_cuda)
-    #         print(f"Successfully created MyTensor on GPU: {my_images_gpu}")
-    #     else:
-    #         print("\nCUDA not available in PyTorch, skipping GPU tensor creation test.")
-    # except Exception as e:
-    #     print(f"Error creating GPU tensor (make sure CUDA is supported in your C++ build): {e}")
+    try:
+        if torch.cuda.is_available():
+            print("\nCUDA is available in PyTorch, attempting to create GPU Tensor in mytensor...")
+            device_cuda = mytensor.Device("cuda")
+            my_images_gpu = mytensor.Tensor(images_np, device_cuda)
+            print(f"Successfully created MyTensor on GPU: {my_images_gpu}")
+        else:
+            print("\nCUDA not available in PyTorch, skipping GPU tensor creation test.")
+    except Exception as e:
+        print(f"Error creating GPU tensor (make sure CUDA is supported in your C++ build): {e}")
 
 if __name__ == "__main__":
     main()

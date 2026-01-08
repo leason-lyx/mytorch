@@ -534,12 +534,12 @@ void conv2d_bwd(const float* input,
             
             CUBLAS_CHECK(cublasSgemv(
                 cublas_handle.get(),
-                CUBLAS_OP_N,           // 不转置，直接对行求和
-                out_channels,          // 行数
-                HW,                    // 列数
+                CUBLAS_OP_T,           // treat row-major as column-major and transpose
+                HW,
+                out_channels,
                 &alpha,
                 grad_output_n,         // 矩阵
-                out_channels,           // leading dimension
+                HW,                     // leading dimension
                 ones.get(),            // 向量 - 使用预分配的 ones 向量
                 1,                     // 增量
                 &beta,
