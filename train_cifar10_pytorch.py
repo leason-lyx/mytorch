@@ -1,40 +1,28 @@
 import argparse
 import time
-import numpy as np
+
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 
-from mytensor import (
-    Tensor,
-    Conv2d,
-    MaxPool2d,
-    ReLU,
-    Linear,
-    Flatten,
-    SGD,
-    Adam,
-    cross_entropy_loss,
-    Module,
-)
 
-# 定义一个更深的卷积网络以提升表达能力
-class SimpleCNN(Module):
-    def __init__(self, device="cuda"):
-        # 卷积特征提取部分
-        self.conv1 = Conv2d(3, 32, kernel_size=3, stride=1, padding=1, device=device)
-        self.conv2 = Conv2d(32, 32, kernel_size=3, stride=1, padding=1, device=device)
-        self.conv3 = Conv2d(32, 64, kernel_size=3, stride=1, padding=1, device=device)
-        self.conv4 = Conv2d(64, 64, kernel_size=3, stride=1, padding=1, device=device)
-        self.conv5 = Conv2d(64, 128, kernel_size=3, stride=1, padding=1, device=device)
-        self.pool = MaxPool2d(kernel_size=2, stride=2)
-        self.relu = ReLU()
-        self.flatten = Flatten()
-        # 全连接分类头
-        self.fc1 = Linear(128 * 4 * 4, 512, device=device)
-        self.fc2 = Linear(512, 10, device=device)
+class SimpleCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.conv5 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.relu = nn.ReLU()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(128 * 4 * 4, 512)
+        self.fc2 = nn.Linear(512, 10)
 
-    def __call__(self, x):
+    def forward(self, x):
         x = self.conv1(x)
         x = self.relu(x)
         x = self.conv2(x)
@@ -55,56 +43,46 @@ class SimpleCNN(Module):
         return x
 
 
-def _to_mytensor(images, device):
-    # 将 PyTorch Tensor 转为 mytensor 可用的连续 numpy
-    images_np = np.ascontiguousarray(images.numpy(), dtype=np.float32)
-    return Tensor(images_np, device=device, requires_grad=False)
-
-
-def _to_labels(labels):
-    # 标签用 int32，匹配底层接口
-    return np.ascontiguousarray(labels.numpy(), dtype=np.int32)
-
-
 def train_one_epoch(model, optimizer, data_loader, device):
-    # 训练一个 epoch，并统计损失/准确率
+    model.train()
     total_loss = 0.0
     total_correct = 0
     total = 0
     for images, labels in data_loader:
-        x = _to_mytensor(images, device)
-        y = _to_labels(labels)
-        # 前向 + 反向 + 更新
-        logits = model(x)
-        loss = cross_entropy_loss(logits, y)
+        images = images.to(device)
+        labels = labels.to(device, dtype=torch.long)
+
+        logits = model(images)
+        loss = F.cross_entropy(logits, labels)
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        optimizer.zero_grad()
 
-        loss_value = float(loss.data.numpy().reshape(-1)[0])
-        total_loss += loss_value * y.shape[0]
-        preds = np.argmax(logits.detach().data.numpy(), axis=1)
-        total_correct += int((preds == y).sum())
-        total += y.shape[0]
+        batch_size = labels.size(0)
+        total_loss += float(loss.item()) * batch_size
+        preds = logits.argmax(dim=1)
+        total_correct += int((preds == labels).sum().item())
+        total += batch_size
     return total_loss / total, total_correct / total
 
 
 def evaluate(model, data_loader, device):
-    # 评估阶段不需要反向
+    model.eval()
     total_loss = 0.0
     total_correct = 0
     total = 0
-    for images, labels in data_loader:
-        x = _to_mytensor(images, device)
-        y = _to_labels(labels)
-        logits = model(x)
-        logits = logits.detach()
-        loss = cross_entropy_loss(logits, y)
-        loss_value = float(loss.data.numpy().reshape(-1)[0])
-        total_loss += loss_value * y.shape[0]
-        preds = np.argmax(logits.data.numpy(), axis=1)
-        total_correct += int((preds == y).sum())
-        total += y.shape[0]
+    with torch.no_grad():
+        for images, labels in data_loader:
+            images = images.to(device)
+            labels = labels.to(device, dtype=torch.long)
+
+            logits = model(images)
+            loss = F.cross_entropy(logits, labels)
+            batch_size = labels.size(0)
+            total_loss += float(loss.item()) * batch_size
+            preds = logits.argmax(dim=1)
+            total_correct += int((preds == labels).sum().item())
+            total += batch_size
     return total_loss / total, total_correct / total
 
 
@@ -135,18 +113,15 @@ def _parse_args():
 
 
 def main():
-    # 解析命令行参数
     args = _parse_args()
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for mytensor conv/linear kernels.")
+        raise RuntimeError("CUDA is required for fair performance comparison.")
 
-    # 训练超参
     device = "cuda"
     batch_size = args.batch_size
     epochs = args.epochs
     lr = args.lr
 
-    # 训练/测试数据增强与归一化
     train_transform = transforms.Compose(
         [
             transforms.RandomCrop(32, padding=4),
@@ -163,7 +138,6 @@ def main():
         ]
     )
 
-    # 构建数据集与数据加载器
     train_dataset = torchvision.datasets.CIFAR10(
         root="./data", train=True, download=True, transform=train_transform
     )
@@ -178,17 +152,20 @@ def main():
         test_dataset, batch_size=batch_size, shuffle=False, num_workers=0
     )
 
-    # 构建模型与优化器
-    model = SimpleCNN(device=device)
+    model = SimpleCNN().to(device)
     if args.optimizer == "sgd":
-        optimizer = SGD(
+        optimizer = torch.optim.SGD(
             model.parameters(),
             lr=lr,
             momentum=args.momentum,
             weight_decay=args.weight_decay,
         )
     else:
-        optimizer = Adam(model.parameters(), lr=lr, weight_decay=args.weight_decay)
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=lr,
+            weight_decay=args.weight_decay,
+        )
 
     total_start = time.perf_counter()
     for epoch in range(1, epochs + 1):
