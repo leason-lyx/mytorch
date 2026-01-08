@@ -3,7 +3,7 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 
-from mytensor_autograd import (
+from mytensor import (
     Tensor,
     Conv2d,
     MaxPool2d,

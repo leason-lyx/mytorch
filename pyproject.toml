@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel", "torch>=2.7.0", "pybind11>=3.0.1","numpy"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hw4"
+name = "mytorch"
 version = "0.1.0"
 description = "Add your description here"
 readme = "AGENTS.md"

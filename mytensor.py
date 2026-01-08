@@ -1,5 +1,89 @@
+import importlib.util
+import pathlib
+import sys
+import types
+
 import numpy as np
-import mytensor
+
+
+def _find_extension_path(module_dir: pathlib.Path) -> pathlib.Path:
+    suffixes = (".pyd", ".so", ".dylib")
+    candidates = []
+    for suffix in suffixes:
+        candidates.extend(module_dir.glob(f"mytensor*{suffix}"))
+    candidates = [path for path in candidates if path.is_file()]
+    if not candidates:
+        raise ImportError(
+            "Cannot locate the compiled mytensor extension module next to mytensor.py."
+        )
+    return sorted(candidates)[0]
+
+
+def _load_core_module() -> types.ModuleType:
+    module_dir = pathlib.Path(__file__).resolve().parent
+    ext_path = _find_extension_path(module_dir)
+    # Remove this module entry so the extension can load under the same name.
+    sys.modules.pop(__name__, None)
+    spec = importlib.util.spec_from_file_location(__name__, ext_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to create a module spec for {ext_path}.")
+    core = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(core)
+    return core
+
+
+_core = _load_core_module()
+
+_raw = types.SimpleNamespace(
+    Tensor=_core.Tensor,
+    Device=_core.Device,
+    relu=_core.relu,
+    relu_backward=_core.relu_backward,
+    sigmoid=_core.sigmoid,
+    sigmoid_backward=_core.sigmoid_backward,
+    softmax=_core.softmax,
+    cross_entropy_loss=_core.cross_entropy_loss,
+    cross_entropy_loss_backward=_core.cross_entropy_loss_backward,
+    linear=_core.linear,
+    linear_backward=_core.linear_backward,
+    conv2d=_core.conv2d,
+    conv2d_backward=_core.conv2d_backward,
+    max_pool2d=_core.max_pool2d,
+    max_pool2d_backward=_core.max_pool2d_backward,
+)
+core = _raw
+RawTensor = _raw.Tensor
+RawDevice = _raw.Device
+
+
+class _ShapeProxy(list):
+    def __call__(self):
+        return list(self)
+
+
+def _infer_device(raw_tensor) -> str:
+    try:
+        text = repr(raw_tensor)
+    except Exception:
+        return "cpu"
+    if "device=cuda" in text:
+        return "cuda"
+    if "device=cpu" in text:
+        return "cpu"
+    return "cpu"
+
+
+_DEVICE_SENTINEL = object()
+
+
+def _normalize_device(device):
+    if device is _DEVICE_SENTINEL:
+        return device
+    if isinstance(device, str):
+        return device
+    if isinstance(device, _raw.Device):
+        return "cuda" if device.is_cuda() else "cpu"
+    return str(device)
 
 
 class Context:
@@ -22,6 +106,9 @@ class Function:
                 raw_args.append(arg.data)
                 requires_grad = requires_grad or arg.requires_grad
                 device = arg.device
+            elif isinstance(arg, _raw.Tensor):
+                raw_args.append(arg)
+                device = _infer_device(arg)
             else:
                 raw_args.append(arg)
         out_data = cls.forward(ctx, *raw_args)
@@ -34,26 +121,56 @@ class Function:
 
 
 class Tensor:
-    def __init__(self, data, requires_grad=False, device="cpu"):
+    def __init__(self, data, requires_grad=False, device=_DEVICE_SENTINEL):
+        if device is _DEVICE_SENTINEL and isinstance(requires_grad, (str, _raw.Device)):
+            device = requires_grad
+            requires_grad = False
+        device = _normalize_device(device)
         self.requires_grad = requires_grad
         self.grad = None
-        self.device = device
         self._ctx = None
-        if isinstance(data, mytensor.Tensor):
+        if isinstance(data, Tensor):
+            data = data.data
+        if (
+            isinstance(data, (list, tuple))
+            and data
+            and all(isinstance(v, (int, np.integer)) for v in data)
+            and device is not _DEVICE_SENTINEL
+        ):
+            self.device = device
+            self.data = _raw.Tensor([int(v) for v in data], _raw.Device(device))
+            return
+        if isinstance(data, _raw.Tensor):
             self.data = data
+            if device is _DEVICE_SENTINEL:
+                self.device = _infer_device(data)
+            else:
+                self.device = device
         else:
+            if device is _DEVICE_SENTINEL:
+                device = "cpu"
+            self.device = device
             np_data = np.array(data, dtype=np.float32)
-            self.data = mytensor.Tensor(np_data, mytensor.Device(device))
+            self.data = _raw.Tensor(np_data, _raw.Device(device))
 
     @property
     def shape(self):
-        return list(self.data.shape())
+        return _ShapeProxy(self.data.shape())
 
     def numpy(self):
         return self.data.numpy()
 
     def detach(self):
         return Tensor(self.data, requires_grad=False, device=self.device)
+
+    def cpu(self):
+        return Tensor(self.data.cpu(), requires_grad=self.requires_grad, device="cpu")
+
+    def gpu(self):
+        return Tensor(self.data.gpu(), requires_grad=self.requires_grad, device="cuda")
+
+    def reshape(self, shape):
+        return reshape(self, shape)
 
     def backward(self, grad=None):
         if not self.requires_grad:
@@ -97,11 +214,11 @@ class Tensor:
                 node_to_grads.setdefault(inp, []).append(grad_inp)
 
     def __repr__(self):
-        return f"Tensor(shape={self.shape}, device={self.device})"
+        return f"Tensor(shape={list(self.shape)}, device={self.device})"
 
 
 class Parameter(Tensor):
-    def __init__(self, data, device="cpu"):
+    def __init__(self, data, device=_DEVICE_SENTINEL):
         super().__init__(data, requires_grad=True, device=device)
 
 
@@ -152,7 +269,7 @@ def _scale_tensor(tensor, scale):
 class Conv2dFn(Function):
     @staticmethod
     def forward(ctx, input, weight, bias, stride_h, stride_w, pad_h, pad_w):
-        out = mytensor.conv2d(input, weight, bias, stride_h, stride_w, pad_h, pad_w)
+        out = _raw.conv2d(input, weight, bias, stride_h, stride_w, pad_h, pad_w)
         ctx.save_for_backward(input, out, weight, bias)
         ctx.stride = (stride_h, stride_w)
         ctx.padding = (pad_h, pad_w)
@@ -163,7 +280,7 @@ class Conv2dFn(Function):
         input, out, weight, bias = ctx.saved_tensors
         stride_h, stride_w = ctx.stride
         pad_h, pad_w = ctx.padding
-        grad_input, grad_weight, grad_bias = mytensor.conv2d_backward(
+        grad_input, grad_weight, grad_bias = _raw.conv2d_backward(
             input, out, weight, bias, stride_h, stride_w, pad_h, pad_w, grad_output.data
         )
         device = grad_output.device
@@ -181,14 +298,14 @@ class Conv2dFn(Function):
 class LinearFn(Function):
     @staticmethod
     def forward(ctx, input, weight, bias):
-        out = mytensor.linear(input, weight, bias)
+        out = _raw.linear(input, weight, bias)
         ctx.save_for_backward(input, weight, bias)
         return out
 
     @staticmethod
     def backward(ctx, grad_output):
         input, weight, bias = ctx.saved_tensors
-        grad_input, grad_weight, grad_bias = mytensor.linear_backward(
+        grad_input, grad_weight, grad_bias = _raw.linear_backward(
             input, weight, bias, grad_output.data
         )
         device = grad_output.device
@@ -202,21 +319,54 @@ class LinearFn(Function):
 class ReLUFn(Function):
     @staticmethod
     def forward(ctx, input):
-        out = mytensor.relu(input)
+        out = _raw.relu(input)
         ctx.save_for_backward(input)
         return out
 
     @staticmethod
     def backward(ctx, grad_output):
         (input,) = ctx.saved_tensors
-        grad_input = mytensor.relu_backward(input, grad_output.data)
+        grad_input = _raw.relu_backward(input, grad_output.data)
+        return Tensor(grad_input, device=grad_output.device)
+
+
+class SigmoidFn(Function):
+    @staticmethod
+    def forward(ctx, input):
+        out = _raw.sigmoid(input)
+        ctx.save_for_backward(input)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (input,) = ctx.saved_tensors
+        grad_input = _raw.sigmoid_backward(input, grad_output.data)
+        return Tensor(grad_input, device=grad_output.device)
+
+
+class SoftmaxFn(Function):
+    @staticmethod
+    def forward(ctx, input):
+        out = _raw.softmax(input)
+        ctx.save_for_backward(out)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (out,) = ctx.saved_tensors
+        y = out.numpy()
+        g = grad_output.data.numpy()
+        if y.ndim != 2:
+            raise ValueError("Softmax backward expects a 2D tensor.")
+        dot = np.sum(g * y, axis=1, keepdims=True)
+        grad_input = y * (g - dot)
         return Tensor(grad_input, device=grad_output.device)
 
 
 class MaxPool2dFn(Function):
     @staticmethod
     def forward(ctx, input, pool_h, pool_w, stride_h, stride_w):
-        out = mytensor.max_pool2d(input, pool_h, pool_w, stride_h, stride_w)
+        out = _raw.max_pool2d(input, pool_h, pool_w, stride_h, stride_w)
         ctx.save_for_backward(input, out)
         ctx.pool = (pool_h, pool_w)
         ctx.stride = (stride_h, stride_w)
@@ -227,7 +377,7 @@ class MaxPool2dFn(Function):
         input, out = ctx.saved_tensors
         pool_h, pool_w = ctx.pool
         stride_h, stride_w = ctx.stride
-        grad_input = mytensor.max_pool2d_backward(
+        grad_input = _raw.max_pool2d_backward(
             input, out, pool_h, pool_w, stride_h, stride_w, grad_output.data
         )
         return Tensor(grad_input, device=grad_output.device), None, None, None, None
@@ -251,12 +401,12 @@ class CrossEntropyLossFn(Function):
     def forward(ctx, logits, labels):
         ctx.save_for_backward(logits)
         ctx.labels = labels
-        return mytensor.cross_entropy_loss(logits, labels)
+        return _raw.cross_entropy_loss(logits, labels)
 
     @staticmethod
     def backward(ctx, grad_output):
         (logits,) = ctx.saved_tensors
-        grad_logits = mytensor.cross_entropy_loss_backward(logits, ctx.labels)
+        grad_logits = _raw.cross_entropy_loss_backward(logits, ctx.labels)
         grad = Tensor(grad_logits, device=grad_output.device)
         scale = float(grad_output.data.numpy().reshape(-1)[0])
         if scale != 1.0:
@@ -278,6 +428,14 @@ def relu(x):
     return ReLUFn.apply(x)
 
 
+def sigmoid(x):
+    return SigmoidFn.apply(x)
+
+
+def softmax(x):
+    return SoftmaxFn.apply(x)
+
+
 def max_pool2d(x, kernel_size, stride=None):
     pool_h = pool_w = int(kernel_size)
     stride_val = int(kernel_size if stride is None else stride)
@@ -289,7 +447,7 @@ def reshape(x, shape):
 
 
 def flatten(x):
-    shape = x.shape
+    shape = list(x.shape)
     batch = shape[0]
     rest = int(np.prod(shape[1:])) if len(shape) > 1 else 1
     return reshape(x, (batch, rest))
@@ -330,6 +488,16 @@ class Linear(Module):
 class ReLU(Module):
     def __call__(self, x):
         return relu(x)
+
+
+class Sigmoid(Module):
+    def __call__(self, x):
+        return sigmoid(x)
+
+
+class Softmax(Module):
+    def __call__(self, x):
+        return softmax(x)
 
 
 class MaxPool2d(Module):
@@ -384,7 +552,7 @@ class SGD(Optimizer):
             else:
                 update = g
             w = w - self.lr * update
-            param.data = mytensor.Tensor(w.astype(np.float32), mytensor.Device(param.device))
+            param.data = _raw.Tensor(w.astype(np.float32), _raw.Device(param.device))
 
 
 class Adam(Optimizer):
@@ -418,4 +586,39 @@ class Adam(Optimizer):
             m_hat = m / (1.0 - self.beta1 ** self._t)
             v_hat = v / (1.0 - self.beta2 ** self._t)
             w = w - self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
-            param.data = mytensor.Tensor(w.astype(np.float32), mytensor.Device(param.device))
+            param.data = _raw.Tensor(w.astype(np.float32), _raw.Device(param.device))
+
+
+_core.core = _raw
+_core.RawTensor = _raw.Tensor
+_core.RawDevice = _raw.Device
+
+_core.Context = Context
+_core.Function = Function
+_core.Tensor = Tensor
+_core.Parameter = Parameter
+_core.Module = Module
+_core.Optimizer = Optimizer
+_core.SGD = SGD
+_core.Adam = Adam
+
+_core.conv2d = conv2d
+_core.linear = linear
+_core.relu = relu
+_core.sigmoid = sigmoid
+_core.softmax = softmax
+_core.max_pool2d = max_pool2d
+_core.reshape = reshape
+_core.flatten = flatten
+_core.cross_entropy_loss = cross_entropy_loss
+
+_core.Conv2d = Conv2d
+_core.Linear = Linear
+_core.ReLU = ReLU
+_core.Sigmoid = Sigmoid
+_core.Softmax = Softmax
+_core.MaxPool2d = MaxPool2d
+_core.Flatten = Flatten
+
+globals().update(_core.__dict__)
+sys.modules[__name__] = _core

@@ -10,6 +10,7 @@ setup(
     version=__version__,
     # author="LiYixin",
     author_email="2200013104@stu.pku.edu.cn",
+    py_modules=["mytensor"],
     packages=find_packages(exclude=("tests",)),
     zip_safe=False,
     install_requires=[
